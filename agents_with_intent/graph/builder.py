@@ -10,6 +10,7 @@ from agents_with_intent.graph.nodes import (
     discover_skills_node,
     skill_selection_node,
     llm_generation_node,
+    tool_execution_node,
     should_continue
 )
 
@@ -22,8 +23,10 @@ def create_agent_graph(
     """Create LangGraph state machine for agent with progressive skill discovery.
     
     Graph structure:
-    1. START -> load_config -> discover_skills -> skill_selection -> generate -> END
-    2. Loop back from END to skill_selection for multi-turn conversations
+    1. START -> load_config -> discover_skills -> skill_selection -> generate
+    2. After generate: check if tool calls exist
+       - If yes: execute tools -> generate again (with tool results)
+       - If no: END
     
     Args:
         llm: LangChain LLM instance (any compatible model)
@@ -57,13 +60,30 @@ def create_agent_graph(
         lambda state: llm_generation_node(state, llm)
     )
     
+    workflow.add_node(
+        "tools",
+        tool_execution_node
+    )
+    
     # Define edges
     workflow.set_entry_point("load_config")
     
     workflow.add_edge("load_config", "discover_skills")
     workflow.add_edge("discover_skills", "skill_selection")
     workflow.add_edge("skill_selection", "generate")
-    workflow.add_edge("generate", END)
+    
+    # Conditional edge after generate: check for tool calls
+    workflow.add_conditional_edges(
+        "generate",
+        should_continue,
+        {
+            "tools": "tools",
+            "end": END
+        }
+    )
+    
+    # After executing tools, generate response with tool results
+    workflow.add_edge("tools", "generate")
     
     # Add checkpointing for conversation state
     checkpointer = MemorySaver()

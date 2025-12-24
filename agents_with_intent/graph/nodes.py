@@ -2,12 +2,13 @@
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.language_models import BaseChatModel
 
 from agents_with_intent.graph.state import AgentState
 from agents_with_intent.skills.discovery import discover_skills
 from agents_with_intent.skills.loader import SkillLoader
+from agents_with_intent.skills.tools import create_tools_from_active_skills
 
 
 def load_agent_config_node(state: AgentState, agent_config_path: Optional[str]) -> Dict:
@@ -106,9 +107,11 @@ When the user's request matches a skill's description:
 3. Use the skill's scripts, references, and assets as needed
 
 Available skill resources:
-- scripts/: Executable code (call when needed)
+- scripts/: Executable code - **You have tools to execute these scripts directly**
 - references/: Detailed documentation (load when needed)
 - assets/: Templates, data files, images (access when needed)
+
+When a skill has scripts, they are available as tools you can call. Use them to perform actions rather than just providing code examples.
 """
     
     return prompt
@@ -192,8 +195,19 @@ def llm_generation_node(state: AgentState, llm: BaseChatModel) -> Dict:
     llm_messages = [SystemMessage(content=system_prompt)]
     llm_messages.extend(messages)
     
+    # Create tools from active skills' scripts
+    active_skills = state.get("active_skills", [])
+    skill_loaders = state.get("skill_loaders", {})
+    
+    tools = []
+    if active_skills and skill_loaders:
+        tools = create_tools_from_active_skills(active_skills, skill_loaders)
+    
+    # Bind tools to LLM if available
+    llm_with_tools = llm.bind_tools(tools) if tools else llm
+    
     # Generate response
-    response = llm.invoke(llm_messages)
+    response = llm_with_tools.invoke(llm_messages)
     
     # Return message to be appended to state
     return {
@@ -208,8 +222,84 @@ def should_continue(state: AgentState) -> str:
         state: Current agent state
         
     Returns:
-        Next node name: "generate", "end"
+        Next node name: "tools", "generate", or "end"
     """
-    # Simple routing - always generate for now
-    # Could add more sophisticated routing logic here
-    return "generate"
+    messages = state.get("messages", [])
+    if not messages:
+        return "generate"
+    
+    last_message = messages[-1]
+    
+    # If the last message has tool calls, execute them
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        return "tools"
+    
+    # Otherwise we're done
+    return "end"
+
+
+def tool_execution_node(state: AgentState) -> Dict:
+    """Execute tool calls from the last AI message.
+    
+    Args:
+        state: Current agent state with tool calls in last message
+        
+    Returns:
+        State update with tool results as ToolMessage objects
+    """
+    messages = state.get("messages", [])
+    last_message = messages[-1]
+    
+    if not isinstance(last_message, AIMessage):
+        return {"messages": []}
+    
+    tool_calls = last_message.tool_calls
+    if not tool_calls:
+        return {"messages": []}
+    
+    # Get tools from active skills
+    active_skills = state.get("active_skills", [])
+    skill_loaders = state.get("skill_loaders", {})
+    tools = create_tools_from_active_skills(active_skills, skill_loaders)
+    
+    # Create tool name -> tool mapping
+    tools_by_name = {tool.name: tool for tool in tools}
+    
+    # Execute each tool call
+    tool_messages = []
+    for tool_call in tool_calls:
+        tool_name = tool_call["name"]
+        tool_args = tool_call.get("args", {})
+        tool_id = tool_call["id"]
+        
+        if tool_name in tools_by_name:
+            try:
+                # Invoke the tool
+                tool_func = tools_by_name[tool_name]
+                result = tool_func.invoke(tool_args)
+                tool_messages.append(
+                    ToolMessage(
+                        content=str(result),
+                        tool_call_id=tool_id,
+                        name=tool_name
+                    )
+                )
+            except Exception as e:
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error executing {tool_name}: {e}",
+                        tool_call_id=tool_id,
+                        name=tool_name
+                    )
+                )
+        else:
+            tool_messages.append(
+                ToolMessage(
+                    content=f"Tool {tool_name} not found",
+                    tool_call_id=tool_id,
+                    name=tool_name
+                )
+            )
+    
+    return {"messages": tool_messages}
+

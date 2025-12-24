@@ -6,6 +6,7 @@ from agents_with_intent.graph.nodes import (
     discover_skills_node,
     skill_selection_node,
     llm_generation_node,
+    tool_execution_node,
     build_system_prompt,
     should_continue
 )
@@ -17,6 +18,7 @@ __all__ = [
     "discover_skills_node",
     "skill_selection_node",
     "llm_generation_node",
+    "tool_execution_node",
     "build_system_prompt",
     "should_continue",
     "create_agent_graph",
