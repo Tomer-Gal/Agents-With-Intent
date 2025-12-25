@@ -1,6 +1,7 @@
 """Graph nodes for LangGraph agent state machine."""
 from typing import Dict, List, Optional
 from pathlib import Path
+import re
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.language_models import BaseChatModel
@@ -148,6 +149,22 @@ def skill_selection_node(state: AgentState) -> Dict:
     active_skills = list(state.get("active_skills", []))
     skill_loaders = dict(state.get("skill_loaders", {}))
     
+    def tokenize(text: str) -> set[str]:
+        tokens = set(re.findall(r"[a-z0-9]+", text.lower()))
+
+        # Heuristic: treat arithmetic operators as intent hints. This enables
+        # prompts like "5+2" to match a skill described with words like "add".
+        if "+" in text:
+            tokens.update({"plus", "add"})
+        if "-" in text:
+            tokens.update({"minus", "subtract"})
+        if "*" in text or "×" in text:
+            tokens.update({"times", "multiply"})
+        if "/" in text or "÷" in text:
+            tokens.update({"divide", "division"})
+
+        return tokens
+
     # Simple keyword matching (TODO: use semantic similarity in production)
     for skill_meta in skills_metadata:
         skill_name = skill_meta['name']
@@ -159,8 +176,8 @@ def skill_selection_node(state: AgentState) -> Dict:
         
         # Check if any description words appear in user message
         # This is a simple heuristic - production should use embeddings
-        desc_words = set(description.split())
-        msg_words = set(last_message.split())
+        desc_words = tokenize(description)
+        msg_words = tokenize(last_message)
         
         # If there's overlap, activate the skill
         if desc_words & msg_words:
