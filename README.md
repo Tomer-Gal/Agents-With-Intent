@@ -135,14 +135,17 @@ agent3 = Agent(llm=ollama_llm, skills_dirs=["./skills"])
 ## Development
 
 ```bash
+# Create a virtualenv (recommended)
+uv venv
+
 # Install development dependencies
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 
 # Run tests
-pytest
+uv run pytest
 
 # Run tests with coverage
-pytest --cov=agents_with_intent
+uv run pytest --cov=agents_with_intent
 ```
 
 ## Architecture

@@ -42,7 +42,7 @@ class Agent:
     def __init__(
         self,
         llm: BaseChatModel,
-        skills_dirs: List[str],
+        skills_dirs: Optional[List[str]] = None,
         agent_config_path: Optional[str] = None,
         thread_id: str = "default"
     ):
@@ -59,12 +59,12 @@ class Agent:
             thread_id: Thread ID for conversation checkpointing (default: "default")
         """
         self.llm = llm
-        self.skills_dirs = skills_dirs
+        self.skills_dirs = skills_dirs or ["./skills"]
         self.agent_config_path = agent_config_path
         self.thread_id = thread_id
         
         # Validate skills directories
-        for skills_dir in skills_dirs:
+        for skills_dir in self.skills_dirs:
             skills_path = Path(skills_dir)
             if not skills_path.exists():
                 raise ValueError(f"Skills directory not found: {skills_dir}")
@@ -80,7 +80,7 @@ class Agent:
         # Create LangGraph state machine
         self.graph = create_agent_graph(
             llm=llm,
-            skills_dirs=skills_dirs,
+            skills_dirs=self.skills_dirs,
             agent_config_path=agent_config_path
         )
         

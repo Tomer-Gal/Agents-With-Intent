@@ -1,8 +1,14 @@
-"""Skill parser module for extracting YAML frontmatter and content from SKILL.md files."""
+"""Skill parser module for extracting YAML frontmatter and content from SKILL.md files.
+
+Implements the Open Agent Skills Specification (https://agentskills.io/).
+Parsing is done via `python-frontmatter` (import name: `frontmatter`).
+"""
+
 import re
-import yaml
 from pathlib import Path
 from typing import Dict, Tuple, Optional
+
+import frontmatter
 
 
 def parse_skill_metadata(skill_file: Path) -> Dict[str, any]:
@@ -26,32 +32,24 @@ def parse_skill_metadata(skill_file: Path) -> Dict[str, any]:
     Raises:
         ValueError: If required fields are missing or invalid
     """
-    content = skill_file.read_text(encoding='utf-8')
-    
-    # Extract YAML frontmatter
-    frontmatter_match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
-    if not frontmatter_match:
+    try:
+        post = frontmatter.load(skill_file)
+    except Exception as e:
+        raise ValueError(f"Failed to parse frontmatter in {skill_file}: {e}") from e
+
+    metadata = post.metadata
+    if not isinstance(metadata, dict) or not metadata:
         raise ValueError(f"No YAML frontmatter found in {skill_file}")
     
-    frontmatter_str = frontmatter_match.group(1)
-    
-    try:
-        frontmatter = yaml.safe_load(frontmatter_str)
-    except yaml.YAMLError as e:
-        raise ValueError(f"Invalid YAML in {skill_file}: {e}") from e
-    
-    if not isinstance(frontmatter, dict):
-        raise ValueError(f"YAML frontmatter must be a dictionary in {skill_file}")
-    
     # Validate required fields per Agent Skills spec
-    if 'name' not in frontmatter:
+    if 'name' not in metadata:
         raise ValueError(f"Missing required 'name' field in {skill_file}")
     
-    if 'description' not in frontmatter:
+    if 'description' not in metadata:
         raise ValueError(f"Missing required 'description' field in {skill_file}")
     
-    name = frontmatter['name']
-    description = frontmatter['description']
+    name = metadata['name']
+    description = metadata['description']
     
     # Validate name (spec: 1-64 chars, lowercase alphanumeric + hyphens)
     if not isinstance(name, str) or len(name) < 1 or len(name) > 64:
@@ -76,33 +74,34 @@ def parse_skill_metadata(skill_file: Path) -> Dict[str, any]:
         'name': name,
         'description': description,
     }
-    
-    if 'license' in frontmatter:
-        result['license'] = str(frontmatter['license'])
-    
-    if 'compatibility' in frontmatter:
-        compat = str(frontmatter['compatibility'])
+
+    # Keep backward-compatible support for optional fields.
+    if 'license' in metadata:
+        result['license'] = str(metadata['license'])
+
+    if 'compatibility' in metadata:
+        compat = str(metadata['compatibility'])
         if len(compat) > 500:
             raise ValueError(f"'compatibility' in {skill_file} exceeds 500 characters")
         result['compatibility'] = compat
-    
-    if 'tools' in frontmatter:
-        tools = frontmatter['tools']
+
+    if 'tools' in metadata:
+        tools = metadata['tools']
         if isinstance(tools, str):
             result['tools'] = tools.split()
         elif isinstance(tools, list):
             result['tools'] = [str(t) for t in tools]
         else:
             raise ValueError(f"'tools' in {skill_file} must be string or list")
-    
-    if 'metadata' in frontmatter:
-        if not isinstance(frontmatter['metadata'], dict):
+
+    if 'metadata' in metadata:
+        if not isinstance(metadata['metadata'], dict):
             raise ValueError(f"'metadata' in {skill_file} must be a dictionary")
-        result['metadata'] = frontmatter['metadata']
-    
-    # Warn about non-standard fields (for backward compatibility)
+        result['metadata'] = metadata['metadata']
+
+    # Warn about non-standard fields (forward-compatible with spec).
     standard_fields = {'name', 'description', 'license', 'compatibility', 'tools', 'metadata'}
-    non_standard = set(frontmatter.keys()) - standard_fields
+    non_standard = set(metadata.keys()) - standard_fields
     if non_standard:
         import warnings
         warnings.warn(
@@ -127,18 +126,13 @@ def parse_skill_full(skill_file: Path) -> Tuple[Dict[str, any], str]:
         - metadata_dict: Same as parse_skill_metadata()
         - instructions_content: Full markdown content after frontmatter
     """
-    content = skill_file.read_text(encoding='utf-8')
-    
-    # Extract YAML frontmatter and content
-    frontmatter_match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)$', content, re.DOTALL)
-    if not frontmatter_match:
-        raise ValueError(f"No YAML frontmatter found in {skill_file}")
-    
-    instructions = frontmatter_match.group(2).strip()
-    
-    # Parse metadata
     metadata = parse_skill_metadata(skill_file)
-    
+    try:
+        post = frontmatter.load(skill_file)
+    except Exception as e:
+        raise ValueError(f"Failed to parse frontmatter in {skill_file}: {e}") from e
+
+    instructions = (post.content or "").strip()
     return metadata, instructions
 
 

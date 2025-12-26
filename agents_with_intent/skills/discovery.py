@@ -36,14 +36,15 @@ def validate_skill_name(name: str) -> bool:
     return True
 
 
-def discover_skills(skills_dirs: List[str]) -> List[Dict[str, any]]:
+def discover_skills(skills_dirs: Optional[List[str]] = None) -> List[Dict[str, any]]:
     """Discover all skills in the specified directories.
     
     Scans directories for SKILL.md files and extracts metadata.
     Implements progressive disclosure - only loads name and description at startup.
     
     Args:
-        skills_dirs: List of directory paths to scan for skills
+        skills_dirs: List of directory paths to scan for skills.
+            If None, defaults to ["./skills"].
         
     Returns:
         List of skill metadata dictionaries with keys:
@@ -61,6 +62,10 @@ def discover_skills(skills_dirs: List[str]) -> List[Dict[str, any]]:
     from agents_with_intent.skills.parser import parse_skill_metadata
     
     skills = []
+    seen_names: set[str] = set()
+
+    if skills_dirs is None:
+        skills_dirs = ["./skills"]
     
     for skills_dir_str in skills_dirs:
         skills_dir = Path(skills_dir_str).resolve()
@@ -74,21 +79,21 @@ def discover_skills(skills_dirs: List[str]) -> List[Dict[str, any]]:
         # Find all SKILL.md files
         for skill_file in skills_dir.glob("*/SKILL.md"):
             skill_dir = skill_file.parent
-            skill_name = skill_dir.name
-            
-            # Validate skill name
-            if not validate_skill_name(skill_name):
-                raise ValueError(
-                    f"Invalid skill name '{skill_name}' at {skill_file}. "
-                    f"Must be 1-64 chars, lowercase alphanumeric + hyphens, "
-                    f"no leading/trailing/consecutive hyphens."
-                )
             
             # Parse metadata only (progressive disclosure)
             try:
                 metadata = parse_skill_metadata(skill_file)
             except Exception as e:
                 raise ValueError(f"Error parsing skill at {skill_file}: {e}") from e
+
+            # Ensure unique skill names across all directories
+            name = metadata["name"]
+            if name in seen_names:
+                raise ValueError(
+                    f"Duplicate skill name '{name}' discovered at {skill_file}. "
+                    "Skill names must be unique."
+                )
+            seen_names.add(name)
             
             # Check for optional directories
             has_scripts = (skill_dir / "scripts").exists()
