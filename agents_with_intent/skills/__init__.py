@@ -13,6 +13,7 @@ from agents_with_intent.skills.parser import (
     load_reference_file
 )
 from agents_with_intent.skills.loader import SkillLoader
+from agents_with_intent.skills.registry import SkillRegistry, Skill, SecurityError
 
 __all__ = [
     "discover_skills",
@@ -24,4 +25,7 @@ __all__ = [
     "parse_skill_full",
     "load_reference_file",
     "SkillLoader",
+    "SkillRegistry",
+    "Skill",
+    "SecurityError",
 ]

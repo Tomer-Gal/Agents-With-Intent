@@ -10,6 +10,8 @@ from agents_with_intent.graph.state import AgentState
 from agents_with_intent.skills.discovery import discover_skills
 from agents_with_intent.skills.loader import SkillLoader
 from agents_with_intent.skills.tools import create_tools_from_active_skills
+from agents_with_intent.skills.core_tools import load_skill, read_skill_resource
+from agents_with_intent.skills.registry import SecurityError
 
 
 def load_agent_config_node(state: AgentState, agent_config_path: Optional[str]) -> Dict:
@@ -50,6 +52,7 @@ def discover_skills_node(state: AgentState, skills_dirs: List[str]) -> Dict:
     return {
         "skills_metadata": skills_metadata,
         "active_skills": [],
+        "loaded_skills": [],
         "skill_loaders": {}
     }
 
@@ -71,23 +74,26 @@ def build_system_prompt(state: AgentState, include_instructions: bool = False) -
         prompt += state["agent_config"]
         prompt += "\n\n"
     
-    # Add available skills
+    # Add available skills (Level 1: only name + description)
     skills_metadata = state.get("skills_metadata", [])
     if skills_metadata:
         prompt += "<available_skills>\n"
         for skill_meta in skills_metadata:
-            # Create temporary loader for prompt generation
-            loader = SkillLoader(skill_meta)
-            prompt += loader.to_prompt_context(include_instructions=False)
-            prompt += "\n"
+            name = skill_meta.get("name")
+            description = skill_meta.get("description")
+            prompt += f"- {name}: {description}\n"
         prompt += "</available_skills>\n\n"
     
-    # Add activated skill instructions
-    active_skills = state.get("active_skills", [])
+    # Add loaded skill instructions (Level 2)
+    # Backward compatibility: older callers may not provide `loaded_skills`.
+    # In that case, treat `active_skills` as loaded.
+    loaded_skills = state.get("loaded_skills")
+    if loaded_skills is None:
+        loaded_skills = state.get("active_skills", [])
     skill_loaders = state.get("skill_loaders", {})
-    if active_skills and skill_loaders:
+    if loaded_skills and skill_loaders:
         prompt += "<activated_skills>\n"
-        for skill_name in active_skills:
+        for skill_name in loaded_skills:
             if skill_name in skill_loaders:
                 # skill_loaders stores serializable metadata dicts; create
                 # a SkillLoader instance on-demand to access instructions.
@@ -212,13 +218,20 @@ def llm_generation_node(state: AgentState, llm: BaseChatModel) -> Dict:
     llm_messages = [SystemMessage(content=system_prompt)]
     llm_messages.extend(messages)
     
-    # Create tools from active skills' scripts
-    active_skills = state.get("active_skills", [])
+    # Create tools from loaded skills' scripts (only after paging-in).
+    # Backward compatibility: if `loaded_skills` is not present, treat
+    # `active_skills` as loaded.
+    loaded_skills = state.get("loaded_skills")
+    if loaded_skills is None:
+        loaded_skills = state.get("active_skills", [])
     skill_loaders = state.get("skill_loaders", {})
     
+    # Important: bind skill script tools first so simple fakes/tests that call
+    # the first tool behave as expected.
     tools = []
-    if active_skills and skill_loaders:
-        tools = create_tools_from_active_skills(active_skills, skill_loaders)
+    if loaded_skills and skill_loaders:
+        tools.extend(create_tools_from_active_skills(loaded_skills, skill_loaders))
+    tools.extend([load_skill, read_skill_resource])
     
     # Bind tools to LLM if available
     llm_with_tools = llm.bind_tools(tools) if tools else llm
@@ -274,10 +287,15 @@ def tool_execution_node(state: AgentState) -> Dict:
     if not tool_calls:
         return {"messages": []}
     
-    # Get tools from active skills
-    active_skills = state.get("active_skills", [])
-    skill_loaders = state.get("skill_loaders", {})
-    tools = create_tools_from_active_skills(active_skills, skill_loaders)
+    # Get tools from loaded skills
+    active_skills = list(state.get("active_skills", []))
+    loaded_skills_val = state.get("loaded_skills")
+    loaded_skills = list(loaded_skills_val) if loaded_skills_val is not None else list(active_skills)
+    skill_loaders = dict(state.get("skill_loaders", {}))
+
+    tools = []
+    if loaded_skills and skill_loaders:
+        tools = create_tools_from_active_skills(loaded_skills, skill_loaders)
     
     # Create tool name -> tool mapping
     tools_by_name = {tool.name: tool for tool in tools}
@@ -289,7 +307,117 @@ def tool_execution_node(state: AgentState) -> Dict:
         tool_args = tool_call.get("args", {})
         tool_id = tool_call["id"]
         
-        if tool_name in tools_by_name:
+        if tool_name == "load_skill":
+            skill_name = None
+            if isinstance(tool_args, dict):
+                skill_name = tool_args.get("skill_name")
+            elif isinstance(tool_args, str):
+                skill_name = tool_args
+
+            if not skill_name:
+                tool_messages.append(
+                    ToolMessage(
+                        content="Error: missing skill_name",
+                        tool_call_id=tool_id,
+                        name=tool_name,
+                    )
+                )
+                continue
+
+            # Locate skill metadata by name
+            skill_meta = None
+            for meta in state.get("skills_metadata", []):
+                if meta.get("name") == skill_name:
+                    skill_meta = meta
+                    break
+
+            if not skill_meta:
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: unknown skill '{skill_name}'",
+                        tool_call_id=tool_id,
+                        name=tool_name,
+                    )
+                )
+                continue
+
+            if skill_name not in active_skills:
+                active_skills.append(skill_name)
+            if skill_name not in loaded_skills:
+                loaded_skills.append(skill_name)
+            skill_loaders[skill_name] = skill_meta
+
+            tool_messages.append(
+                ToolMessage(
+                    content=f"Loaded skill '{skill_name}'",
+                    tool_call_id=tool_id,
+                    name=tool_name,
+                )
+            )
+
+        elif tool_name == "read_skill_resource":
+            skill_name = None
+            file_path = None
+            if isinstance(tool_args, dict):
+                skill_name = tool_args.get("skill_name")
+                file_path = tool_args.get("file_path")
+            if not skill_name or not file_path:
+                tool_messages.append(
+                    ToolMessage(
+                        content="Error: expected skill_name and file_path",
+                        tool_call_id=tool_id,
+                        name=tool_name,
+                    )
+                )
+                continue
+
+            # Prefer metadata from loaded skills; fall back to discovered skills.
+            meta = skill_loaders.get(skill_name)
+            if meta is None:
+                for m in state.get("skills_metadata", []):
+                    if m.get("name") == skill_name:
+                        meta = m
+                        break
+
+            if meta is None:
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: unknown skill '{skill_name}'",
+                        tool_call_id=tool_id,
+                        name=tool_name,
+                    )
+                )
+                continue
+
+            # Strict sandbox: file must remain within the skill directory
+            skill_root = Path(meta["skill_dir"]).resolve()
+            candidate = (skill_root / Path(file_path)).resolve()
+            try:
+                candidate.relative_to(skill_root)
+            except Exception as e:
+                raise SecurityError(
+                    f"Access denied: '{file_path}' is outside skill '{skill_name}'"
+                ) from e
+
+            if not candidate.exists() or not candidate.is_file():
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: file not found '{file_path}'",
+                        tool_call_id=tool_id,
+                        name=tool_name,
+                    )
+                )
+                continue
+
+            tool_messages.append(
+                ToolMessage(
+                    content=candidate.read_text(encoding="utf-8"),
+                    tool_call_id=tool_id,
+                    name=tool_name,
+                )
+            )
+
+        elif tool_name in tools_by_name:
             try:
                 # Invoke the tool
                 tool_func = tools_by_name[tool_name]
@@ -318,5 +446,10 @@ def tool_execution_node(state: AgentState) -> Dict:
                 )
             )
     
-    return {"messages": tool_messages}
+    return {
+        "messages": tool_messages,
+        "active_skills": active_skills,
+        "loaded_skills": loaded_skills,
+        "skill_loaders": skill_loaders,
+    }
 

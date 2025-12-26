@@ -76,8 +76,8 @@ def discover_skills(skills_dirs: Optional[List[str]] = None) -> List[Dict[str, a
         if not skills_dir.is_dir():
             raise ValueError(f"Skills path is not a directory: {skills_dir}")
         
-        # Find all SKILL.md files
-        for skill_file in skills_dir.glob("*/SKILL.md"):
+        # Find all SKILL.md files (recursive)
+        for skill_file in skills_dir.glob("**/SKILL.md"):
             skill_dir = skill_file.parent
             
             # Parse metadata only (progressive disclosure)

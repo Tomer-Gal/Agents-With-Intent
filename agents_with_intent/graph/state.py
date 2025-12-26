@@ -23,6 +23,9 @@ class AgentState(TypedDict):
     
     # Currently activated skills (names)
     active_skills: List[str]
+
+    # Skills whose full instructions have been loaded (progressive disclosure)
+    loaded_skills: List[str]
     
     # SkillLoader instances (created when skills are activated)
     skill_loaders: Dict[str, any]  # Dict[str, SkillLoader]

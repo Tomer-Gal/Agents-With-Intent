@@ -41,15 +41,10 @@ def parse_skill_metadata(skill_file: Path) -> Dict[str, any]:
     if not isinstance(metadata, dict) or not metadata:
         raise ValueError(f"No YAML frontmatter found in {skill_file}")
     
-    # Validate required fields per Agent Skills spec
-    if 'name' not in metadata:
-        raise ValueError(f"Missing required 'name' field in {skill_file}")
-    
-    if 'description' not in metadata:
-        raise ValueError(f"Missing required 'description' field in {skill_file}")
-    
-    name = metadata['name']
-    description = metadata['description']
+    # Progressive disclosure registry may want to operate even when frontmatter
+    # is incomplete. Fall back to folder name and a default description.
+    name = metadata.get('name', skill_file.parent.name)
+    description = metadata.get('description', 'No description')
     
     # Validate name (spec: 1-64 chars, lowercase alphanumeric + hyphens)
     if not isinstance(name, str) or len(name) < 1 or len(name) > 64:
@@ -65,15 +60,21 @@ def parse_skill_metadata(skill_file: Path) -> Dict[str, any]:
             f"Invalid 'name' in {skill_file}: no leading/trailing/consecutive hyphens"
         )
     
-    # Validate description (spec: 1-1024 chars)
+    # Validate description (spec: 1-1024 chars). If missing, we default to
+    # 'No description' which satisfies the length constraint.
     if not isinstance(description, str) or len(description) < 1 or len(description) > 1024:
-        raise ValueError(f"Invalid 'description' in {skill_file}: must be 1-1024 characters")
+        raise ValueError(
+            f"Invalid 'description' in {skill_file}: must be 1-1024 characters"
+        )
     
     # Validate optional fields
     result = {
         'name': name,
         'description': description,
     }
+
+    if 'version' in metadata:
+        result['version'] = str(metadata['version'])
 
     # Keep backward-compatible support for optional fields.
     if 'license' in metadata:
@@ -100,7 +101,7 @@ def parse_skill_metadata(skill_file: Path) -> Dict[str, any]:
         result['metadata'] = metadata['metadata']
 
     # Warn about non-standard fields (forward-compatible with spec).
-    standard_fields = {'name', 'description', 'license', 'compatibility', 'tools', 'metadata'}
+    standard_fields = {'name', 'description', 'version', 'license', 'compatibility', 'tools', 'metadata'}
     non_standard = set(metadata.keys()) - standard_fields
     if non_standard:
         import warnings
