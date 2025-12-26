@@ -256,7 +256,7 @@ def should_continue(state: AgentState) -> str:
     """
     messages = state.get("messages", [])
     if not messages:
-        return "generate"
+        return "end"
     
     last_message = messages[-1]
     
@@ -266,6 +266,18 @@ def should_continue(state: AgentState) -> str:
     
     # Otherwise we're done
     return "end"
+
+
+def should_generate(state: AgentState) -> str:
+    """Route after skill selection.
+
+    If there's no user message, don't call the LLM. This enables "warm" graph
+    invocations (e.g., to preload config/skills metadata) without generating.
+    """
+    messages = state.get("messages", [])
+    if not messages:
+        return "end"
+    return "generate"
 
 
 def tool_execution_node(state: AgentState) -> Dict:

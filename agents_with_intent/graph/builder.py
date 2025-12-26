@@ -11,7 +11,8 @@ from agents_with_intent.graph.nodes import (
     skill_selection_node,
     llm_generation_node,
     tool_execution_node,
-    should_continue
+    should_continue,
+    should_generate
 )
 
 
@@ -70,7 +71,16 @@ def create_agent_graph(
     
     workflow.add_edge("load_config", "discover_skills")
     workflow.add_edge("discover_skills", "skill_selection")
-    workflow.add_edge("skill_selection", "generate")
+
+    # If there is no user input yet, don't call the LLM.
+    workflow.add_conditional_edges(
+        "skill_selection",
+        should_generate,
+        {
+            "generate": "generate",
+            "end": END,
+        },
+    )
     
     # Conditional edge after generate: check for tool calls
     workflow.add_conditional_edges(

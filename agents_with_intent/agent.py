@@ -44,7 +44,8 @@ class Agent:
         llm: BaseChatModel,
         skills_dirs: Optional[List[str]] = None,
         agent_config_path: Optional[str] = None,
-        thread_id: str = "default"
+        thread_id: str = "default",
+        eager_init: bool = True,
     ):
         """Initialize agent with LLM and skill configuration.
         
@@ -57,6 +58,9 @@ class Agent:
             skills_dirs: List of directories to scan for SKILL.md files
             agent_config_path: Optional path to agent.md configuration file
             thread_id: Thread ID for conversation checkpointing (default: "default")
+            eager_init: If True (default), run a "warm" graph invocation to
+                        populate agent config and skills metadata. This is safe
+                        and should not trigger an LLM call.
         """
         self.llm = llm
         self.skills_dirs = skills_dirs or ["./skills"]
@@ -86,13 +90,14 @@ class Agent:
         
         # Initialize state for this thread by running initial discovery
         self._state: Optional[AgentState] = None
-        try:
-            config = {"configurable": {"thread_id": self.thread_id}, "recursion_limit": 100}
-            # Run the graph once to populate skills metadata and agent config
-            self.graph.invoke({}, config=config)
-        except Exception:
-            # Don't fail agent construction if discovery has issues; allow later invocation
-            pass
+        if eager_init:
+            try:
+                config = {"configurable": {"thread_id": self.thread_id}, "recursion_limit": 100}
+                # Run the graph once to populate skills metadata and agent config
+                self.graph.invoke({}, config=config)
+            except Exception:
+                # Don't fail agent construction if discovery has issues; allow later invocation
+                pass
     
     def run(self, user_input: str) -> str:
         """Run agent with user input and return response.

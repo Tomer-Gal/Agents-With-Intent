@@ -1,7 +1,65 @@
 """Skill discovery module for scanning directories and finding SKILL.md files."""
+import json
+import os
 import re
 from pathlib import Path
 from typing import List, Dict, Optional
+
+
+def _cache_enabled() -> bool:
+    value = os.environ.get("AGENTS_WITH_INTENT_SKILLS_CACHE")
+    if not value:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _cache_path(skills_dirs: List[str]) -> Path | None:
+    value = os.environ.get("AGENTS_WITH_INTENT_SKILLS_CACHE_PATH")
+    if value:
+        return Path(value).expanduser()
+
+    if not skills_dirs:
+        return None
+
+    # Default near the first skills dir so it's naturally persisted when the
+    # repo is mounted into a container.
+    try:
+        first = Path(skills_dirs[0]).resolve()
+    except Exception:
+        return None
+    return first.parent / ".agents_with_intent_skills_cache.json"
+
+
+def _load_cache(path: Path, skills_dirs: List[str]) -> Dict[str, Dict[str, any]]:
+    try:
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        if data.get("version") != 1:
+            return {}
+        if data.get("skills_dirs") != skills_dirs:
+            return {}
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        # entries: {"/abs/SKILL.md": {"mtime_ns": int, "size": int, "metadata": {...}}}
+        return entries
+    except Exception:
+        return {}
+
+
+def _save_cache(path: Path, skills_dirs: List[str], entries: Dict[str, Dict[str, any]]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        payload = {"version": 1, "skills_dirs": skills_dirs, "entries": entries}
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        # Cache failures must never break skill discovery.
+        return
 
 
 def validate_skill_name(name: str) -> bool:
@@ -67,6 +125,15 @@ def discover_skills(skills_dirs: Optional[List[str]] = None) -> List[Dict[str, a
     if skills_dirs is None:
         skills_dirs = ["./skills"]
     
+    cache_entries: Dict[str, Dict[str, any]] = {}
+    cache_file: Path | None = None
+    if _cache_enabled():
+        cache_file = _cache_path(skills_dirs)
+        if cache_file is not None:
+            cache_entries = _load_cache(cache_file, skills_dirs)
+
+    updated_cache_entries: Dict[str, Dict[str, any]] = dict(cache_entries) if cache_entries else {}
+
     for skills_dir_str in skills_dirs:
         skills_dir = Path(skills_dir_str).resolve()
         
@@ -81,10 +148,37 @@ def discover_skills(skills_dirs: Optional[List[str]] = None) -> List[Dict[str, a
             skill_dir = skill_file.parent
             
             # Parse metadata only (progressive disclosure)
+            metadata = None
+            cache_key = str(skill_file)
             try:
-                metadata = parse_skill_metadata(skill_file)
-            except Exception as e:
-                raise ValueError(f"Error parsing skill at {skill_file}: {e}") from e
+                stat = skill_file.stat()
+            except Exception:
+                stat = None
+
+            cached = updated_cache_entries.get(cache_key)
+            if cached and stat is not None:
+                try:
+                    if (
+                        int(cached.get("mtime_ns")) == int(stat.st_mtime_ns)
+                        and int(cached.get("size")) == int(stat.st_size)
+                        and isinstance(cached.get("metadata"), dict)
+                    ):
+                        metadata = cached["metadata"]
+                except Exception:
+                    metadata = None
+
+            if metadata is None:
+                try:
+                    metadata = parse_skill_metadata(skill_file)
+                except Exception as e:
+                    raise ValueError(f"Error parsing skill at {skill_file}: {e}") from e
+
+                if stat is not None:
+                    updated_cache_entries[cache_key] = {
+                        "mtime_ns": int(stat.st_mtime_ns),
+                        "size": int(stat.st_size),
+                        "metadata": metadata,
+                    }
 
             # Ensure unique skill names across all directories
             name = metadata["name"]
@@ -114,6 +208,9 @@ def discover_skills(skills_dirs: Optional[List[str]] = None) -> List[Dict[str, a
                 'has_assets': has_assets,
             })
     
+    if cache_file is not None and updated_cache_entries is not None:
+        _save_cache(cache_file, skills_dirs, updated_cache_entries)
+
     return skills
 
 
