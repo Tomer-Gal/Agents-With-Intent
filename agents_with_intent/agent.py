@@ -87,7 +87,7 @@ class Agent:
         # Initialize state for this thread by running initial discovery
         self._state: Optional[AgentState] = None
         try:
-            config = {"configurable": {"thread_id": self.thread_id}}
+            config = {"configurable": {"thread_id": self.thread_id}, "recursion_limit": 100}
             # Run the graph once to populate skills metadata and agent config
             self.graph.invoke({}, config=config)
         except Exception:
@@ -107,7 +107,7 @@ class Agent:
             Agent's response as string
         """
         # Create config with thread ID for checkpointing
-        config = {"configurable": {"thread_id": self.thread_id}}
+        config = {"configurable": {"thread_id": self.thread_id}, "recursion_limit": 100}
         
         # Prepare input with user message
         input_state = {
