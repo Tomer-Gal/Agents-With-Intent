@@ -15,7 +15,7 @@ from agents_with_intent.skills.tools import create_script_tools
 def test_tool_generation():
     """Test that tools are created from skill scripts."""
     # Discover PDF skill
-    skills_dir = Path(__file__).parent.parent.parent / "DeepAgent-Skills" / ".deepagents" / "skills"
+    skills_dir = Path(__file__).parent.parent.parent / "DeepAgent-Skills" / "skills"
     
     if not skills_dir.exists():
         pytest.skip(f"Skills directory not found: {skills_dir}")
