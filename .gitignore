@@ -205,3 +205,49 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project-specific ignores
+# Runtime traces, logs, and large generated artifacts
+sample_trace.json
+*.prof
+*.log
+logs/
+
+# Agent skills cache
+.agents_with_intent_skills_cache.json
+
+# Generated PDFs or large assets in tests
+*.pdf
+
+# === Recommended additional ignores ===
+# Local environment overrides
+.env.local
+.env.*.local
+
+# Editor swap/temp files
+*.swp
+*.swo
+
+# Node / JS build artifacts (some contributors may add frontend helpers)
+node_modules/
+dist/
+build/
+.next/
+out/
+
+# Trace / telemetry / large artifacts
+*.jsonl
+*.trace
+otel-*.json
+traces/
+
+# Temporary and archive files
+tmp/
+temp/
+*.zip
+*.tar.gz
+
+# Private keys / secrets
+*.key
+*.pem
+secrets/
