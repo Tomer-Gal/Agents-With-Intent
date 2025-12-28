@@ -15,8 +15,39 @@ from typing import List, Optional
 from pathlib import Path
 import os
 import math
+import subprocess
 
 from langchain_core.tools import tool
+
+
+def _file_root() -> Path:
+    """Return the root directory that file tools are allowed to access.
+
+    Default is current working directory. Override with
+    AGENTS_WITH_INTENT_FILE_ROOT.
+    """
+    root = os.environ.get("AGENTS_WITH_INTENT_FILE_ROOT")
+    base = Path(root).expanduser() if root else Path.cwd()
+    return base.resolve()
+
+
+def _resolve_path_in_root(user_path: str) -> Path:
+    """Resolve a user-provided path and ensure it stays within _file_root()."""
+    root = _file_root()
+    candidate = Path(user_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+
+    candidate = candidate.resolve()
+
+    try:
+        candidate.relative_to(root)
+    except Exception as e:
+        raise PermissionError(
+            f"Access denied: '{user_path}' is outside allowed root '{root}'"
+        ) from e
+
+    return candidate
 
 
 # =============================================================================
@@ -34,7 +65,7 @@ def file_read(file_path: str) -> str:
         File contents as string, or error message
     """
     try:
-        path = Path(file_path).expanduser()
+        path = _resolve_path_in_root(file_path)
         if not path.exists():
             return f"Error: File not found: {file_path}"
         if not path.is_file():
@@ -64,7 +95,7 @@ def file_write(file_path: str, content: str) -> str:
         Success message or error
     """
     try:
-        path = Path(file_path).expanduser()
+        path = _resolve_path_in_root(file_path)
         
         # Create parent directories if needed
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,7 +120,7 @@ def file_append(file_path: str, content: str) -> str:
         Success message or error
     """
     try:
-        path = Path(file_path).expanduser()
+        path = _resolve_path_in_root(file_path)
         
         # Create parent directories if needed
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,7 +147,7 @@ def file_list(directory_path: str, pattern: Optional[str] = None) -> str:
         List of files as newline-separated string, or error message
     """
     try:
-        path = Path(directory_path).expanduser()
+        path = _resolve_path_in_root(directory_path)
         if not path.exists():
             return f"Error: Directory not found: {directory_path}"
         if not path.is_dir():
@@ -230,6 +261,78 @@ def web_search(query: str) -> str:
 
 
 # =============================================================================
+# Command Execution (Allowlisted)
+# =============================================================================
+
+
+@tool
+def run_command(
+    program: str,
+    arguments: Optional[List[str]] = None,
+    cwd: Optional[str] = None,
+    timeout_s: int = 60,
+) -> str:
+    """Run a command without a shell using an allowlist.
+
+    This is intentionally conservative. It is meant to support skills that
+    need to invoke language runtimes like Python/Node to generate artifacts.
+
+    Allowed programs: python, python3, node
+
+    Args:
+        program: Executable name or path (basename must be allowlisted)
+        arguments: List of command-line arguments (no shell parsing)
+        cwd: Working directory (must be within AGENTS_WITH_INTENT_FILE_ROOT or CWD)
+        timeout_s: Timeout in seconds
+
+    Returns:
+        Combined stdout/stderr and exit code summary.
+    """
+    allowed = {"python", "python3", "node"}
+    prog_name = Path(program).name
+    if prog_name not in allowed:
+        return f"Error: program '{prog_name}' not allowed (allowed: {sorted(allowed)})"
+
+    try:
+        root = _file_root()
+        run_cwd = _resolve_path_in_root(cwd) if cwd else root
+
+        cmd: List[str] = [program]
+        if arguments:
+            cmd.extend([str(a) for a in arguments])
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(run_cwd),
+            capture_output=True,
+            text=True,
+            timeout=int(timeout_s),
+            check=False,
+        )
+
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        combined = stdout
+        if stderr:
+            combined += ("\n" if combined else "") + stderr
+
+        # Avoid dumping huge outputs into context.
+        max_chars = 20_000
+        if len(combined) > max_chars:
+            combined = combined[:max_chars] + "\n...<output truncated>..."
+
+        return f"exit_code={result.returncode}\n{combined}".strip()
+    except subprocess.TimeoutExpired:
+        return f"Error: command timed out after {timeout_s}s"
+    except PermissionError as e:
+        return f"Error: {e}"
+    except FileNotFoundError:
+        return f"Error: program not found: {program}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# =============================================================================
 # Tool Registry
 # =============================================================================
 
@@ -239,6 +342,7 @@ STANDARD_TOOLS = {
     "file_write": file_write,
     "file_append": file_append,
     "file_list": file_list,
+    "run_command": run_command,
     "calculate": calculate,
     "web_search": web_search,
 }
@@ -246,6 +350,7 @@ STANDARD_TOOLS = {
 # Tool categories for documentation
 TOOL_CATEGORIES = {
     "file": ["file_read", "file_write", "file_append", "file_list"],
+    "exec": ["run_command"],
     "math": ["calculate"],
     "search": ["web_search"],
 }

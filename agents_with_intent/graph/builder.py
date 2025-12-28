@@ -27,6 +27,7 @@ from agents_with_intent.graph.nodes import (
     create_worker_tool_execution_node,
     worker_should_continue,
 )
+from agents_with_intent.graph.skill_directives import skill_directive_execution_node
 from agents_with_intent.graph.supervisor import (
     supervisor_node,
     route_supervisor,
@@ -74,6 +75,12 @@ def create_agent_graph(
         skill_selection_node
     )
     
+    # Add directive execution node - automatically execute MANDATORY/CRITICAL directives
+    workflow.add_node(
+        "execute_directives",
+        skill_directive_execution_node
+    )
+    
     workflow.add_node(
         "generate",
         lambda state: llm_generation_node(state, llm)
@@ -89,10 +96,11 @@ def create_agent_graph(
     
     workflow.add_edge("load_config", "discover_skills")
     workflow.add_edge("discover_skills", "skill_selection")
+    workflow.add_edge("skill_selection", "execute_directives")
 
     # If there is no user input yet, don't call the LLM.
     workflow.add_conditional_edges(
-        "skill_selection",
+        "execute_directives",
         should_generate,
         {
             "generate": "generate",

@@ -131,6 +131,8 @@ Available skill resources:
 - assets/: Templates, data files, images (access when needed)
 
 When a skill has scripts, they are available as tools you can call. Use them to perform actions rather than just providing code examples.
+
+If the user requests creating or writing a file (and provides a filename/path), prefer using tools immediately to produce the artifact in the current working directory. Avoid asking follow-up questions unless required inputs are missing.
 """
     
     return prompt
@@ -238,15 +240,25 @@ def llm_generation_node(state: AgentState, llm: BaseChatModel) -> Dict:
         loaded_skills = state.get("active_skills", [])
     skill_loaders = state.get("skill_loaders", {})
     
-    # Important: bind skill script tools first so simple fakes/tests that call
-    # the first tool behave as expected.
+    # Bind tools for the model: standard tools are always available, plus
+    # scripts from active/loaded skills.
     tools = []
+    tools.extend(get_standard_tools())
     if loaded_skills and skill_loaders:
         tools.extend(create_tools_from_active_skills(loaded_skills, skill_loaders))
     tools.extend([load_skill, read_skill_resource])
     
     # Bind tools to LLM if available
-    llm_with_tools = llm.bind_tools(tools) if tools else llm
+    # NOTE: We intentionally do NOT use tool_choice="required" because some
+    # models (like local Ollama models) may produce malformed tool calls when
+    # forced. Let the model decide naturally.
+    if tools:
+        try:
+            llm_with_tools = llm.bind_tools(tools)
+        except TypeError:
+            llm_with_tools = llm
+    else:
+        llm_with_tools = llm
     
     # Generate response
     response = llm_with_tools.invoke(llm_messages)
@@ -318,8 +330,9 @@ def tool_execution_node(state: AgentState) -> Dict:
     skill_loaders = dict(state.get("skill_loaders", {}))
 
     tools = []
+    tools.extend(get_standard_tools())
     if loaded_skills and skill_loaders:
-        tools = create_tools_from_active_skills(loaded_skills, skill_loaders)
+        tools.extend(create_tools_from_active_skills(loaded_skills, skill_loaders))
     
     # Create tool name -> tool mapping
     tools_by_name = {tool.name: tool for tool in tools}
@@ -593,19 +606,22 @@ def create_worker_node(
             skill_tools = create_tools_from_active_skills([skill_name], {skill_name: skill_metadata})
             tools.extend(skill_tools)
         
-        # 2. Add standard library tools if skill requests them
-        requested_tools = skill_metadata.get("tools", [])
-        if requested_tools:
-            standard_tools = get_standard_tools()
-            for std_tool in standard_tools:
-                if std_tool.name in requested_tools:
-                    tools.append(std_tool)
+        # 2. Standard tools are always available (file IO + allowlisted exec)
+        tools.extend(get_standard_tools())
         
         # 3. Add core tools (load_skill, read_skill_resource)
         tools.extend([load_skill, read_skill_resource])
         
-        # Bind tools to LLM
-        llm_with_tools = llm.bind_tools(tools) if tools else llm
+        # Bind tools to LLM.
+        # NOTE: We intentionally do NOT use tool_choice="required" because some
+        # models (like local Ollama models) may produce malformed tool calls when
+        # forced. Let the model decide naturally.
+        llm_with_tools = llm
+        if tools:
+            try:
+                llm_with_tools = llm.bind_tools(tools)
+            except TypeError:
+                pass
 
         if logger.isEnabledFor(logging.DEBUG):
             tool_names = [getattr(t, "name", str(t)) for t in tools]
@@ -705,13 +721,8 @@ def create_worker_tool_execution_node(
             skill_tools = create_tools_from_active_skills([skill_name], {skill_name: skill_metadata})
             tools.extend(skill_tools)
         
-        # Add standard tools if requested
-        requested_tools = skill_metadata.get("tools", [])
-        if requested_tools:
-            standard_tools = get_standard_tools()
-            for std_tool in standard_tools:
-                if std_tool.name in requested_tools:
-                    tools.append(std_tool)
+        # Standard tools are always available (file IO + allowlisted exec)
+        tools.extend(get_standard_tools())
         
         # Create tool name -> tool mapping
         tools_by_name = {tool.name: tool for tool in tools}

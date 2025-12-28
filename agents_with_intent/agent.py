@@ -140,17 +140,28 @@ class Agent:
         Yields:
             Response tokens as they're generated
         """
-        config = {"configurable": {"thread_id": self.thread_id}}
-        
+        # LangGraph streams node updates keyed by node name, e.g.
+        # {"generate": {"messages": [AIMessage(...)]}}.
+        config = {"configurable": {"thread_id": self.thread_id}, "recursion_limit": 100}
+
         input_state = {
             "messages": [HumanMessage(content=user_input)]
         }
-        
-        # Stream graph execution
-        for chunk in self.graph.stream(input_state, config=config):
-            # Extract messages from state updates
-            if "messages" in chunk:
-                for message in chunk["messages"]:
+
+        # Stream graph execution (node-by-node updates)
+        for update in self.graph.stream(input_state, config=config, stream_mode="updates"):
+            if not isinstance(update, dict):
+                continue
+
+            for _node_name, chunk in update.items():
+                if not isinstance(chunk, dict):
+                    continue
+
+                messages = chunk.get("messages")
+                if not messages:
+                    continue
+
+                for message in messages:
                     if isinstance(message, AIMessage):
                         yield message.content
     
